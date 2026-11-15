@@ -1,0 +1,13 @@
+{
+  "name": "wotb-hediye-radar",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "World of Tanks Blitz 7/24 Hediye, Bonus Kod ve Turkce Haber Radari",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "dry-run": "node src/index.mjs --dry-run",
+    "test": "node --test test/detectors.test.mjs",
+    "setup-telegram": "node src/setup-telegram.mjs"
+  }
+}
