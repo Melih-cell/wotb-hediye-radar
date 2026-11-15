@@ -6,7 +6,7 @@ import { classifyRedditPost } from './detectors.mjs';
 import { fetchOfficialSources } from './sources/official.mjs';
 import { fetchRedditPosts } from './sources/reddit.mjs';
 import { translateToTurkish } from './translate.mjs';
-import { cleanText, getIstanbulTimeParts } from './utils.mjs';
+import { cleanText, getIstanbulTimeParts, normalizeTitleKey } from './utils.mjs';
 import {
   buildDailyReminderMessage,
   buildOfficialNewsMessage,
@@ -93,6 +93,7 @@ async function deliverOrPreview({ dryRun, token, chatIds, payload, label }) {
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
+  const testTelegram = process.argv.includes('--test-telegram') || process.env.SEND_TEST_CARDS === 'true';
   const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const chatIds = parseChatIds(process.env.TELEGRAM_CHAT_ID || '');
 
@@ -118,6 +119,83 @@ async function main() {
   const redditPosts = redditResult.status === 'fulfilled' ? redditResult.value : [];
 
   console.log(`📊 Bulunan kayıtlar -> Resmi Haber: ${officialItems.length}, YouTube: ${youtubeVideos.length}, Reddit: ${redditPosts.length}`);
+
+  if (testTelegram) {
+    console.log('🧪 Canlı test modu aktif: 3 test kartı gönderiliyor (state/seen.json değiştirilmeyecek)...');
+
+    const sampleOfficial = officialItems[0] || {
+      source: 'Wargaming EU',
+      title: 'World of Tanks Blitz Official News Check',
+      summary: 'Live feed connection verified from GitHub Actions.',
+      url: 'https://eu.wotblitz.com/en/news/',
+      codes: []
+    };
+    const [trNewsTitle, trNewsSummary] = await Promise.all([
+      translateToTurkish(sampleOfficial.title),
+      translateToTurkish(sampleOfficial.summary)
+    ]);
+    const newsCard = buildOfficialNewsMessage({
+      source: sampleOfficial.source,
+      trTitle: trNewsTitle,
+      trSummary: trNewsSummary,
+      url: sampleOfficial.url,
+      codes: sampleOfficial.codes || []
+    });
+    await deliverOrPreview({
+      dryRun,
+      token,
+      chatIds,
+      payload: {
+        ...newsCard,
+        html: `🧪 <i>[CANLI SİSTEM TESTİ 1/3 — Gerçek Resmi Haber &amp; Türkçe Çeviri]</i>\n\n${newsCard.html}`
+      },
+      label: 'CANLI TEST 1/3'
+    });
+
+    const simPost = {
+      title: 'Stream bonus code: BLITZTEST2026 — claim free container!',
+      selftext: 'Tap the code above to test one-click copy and check the EU redeem button below.',
+      flair: 'News'
+    };
+    const simResult = classifyRedditPost(simPost);
+    const [trSimTitle, trSimSummary] = await Promise.all([
+      translateToTurkish(simPost.title),
+      translateToTurkish(cleanText(simPost.selftext, 340))
+    ]);
+    const rewardCard = buildRewardAlertMessage({
+      type: simResult?.type || 'BONUS_CODE',
+      codes: simResult?.codes || ['BLITZTEST2026'],
+      trTitle: trSimTitle,
+      trSummary: trSimSummary,
+      url: 'https://eu.wargaming.net/shop/redeem/',
+      sourceLabel: 'Sistem Testi Simülasyonu'
+    });
+    await deliverOrPreview({
+      dryRun,
+      token,
+      chatIds,
+      payload: {
+        ...rewardCard,
+        html: `🧪 <i>[CANLI SİSTEM TESTİ 2/3 — Örnek Kod Simülasyonu (test kodudur)]</i>\n\n${rewardCard.html}`
+      },
+      label: 'CANLI TEST 2/3'
+    });
+
+    const dailyCard = buildDailyReminderMessage();
+    await deliverOrPreview({
+      dryRun,
+      token,
+      chatIds,
+      payload: {
+        ...dailyCard,
+        html: `🧪 <i>[CANLI SİSTEM TESTİ 3/3 — Akşam 19:00 Günlük Hatırlatıcı Önizlemesi]</i>\n\n${dailyCard.html}`
+      },
+      label: 'CANLI TEST 3/3'
+    });
+
+    console.log('✅ Canlı test kartları tamamlandı (state/seen.json değiştirilmedi).');
+    return;
+  }
 
   const seenOfficialSet = new Set(state.seenOfficial);
   const seenYoutubeSet = new Set(state.seenYoutube);
@@ -180,6 +258,8 @@ async function main() {
 
     for (const item of officialItems) {
       seenOfficialSet.add(item.id);
+      const tk = normalizeTitleKey(item.title);
+      if (tk) seenOfficialSet.add(`title:${tk}`);
       for (const c of item.codes) seenCodesSet.add(c);
     }
     for (const video of youtubeVideos) {
@@ -222,7 +302,15 @@ async function main() {
     }
 
     // 2. Yeni resmi Wargaming / Steam haberleri
-    const newOfficial = officialItems.filter((item) => !seenOfficialSet.has(item.id)).reverse();
+    const newOfficial = officialItems.filter((item) => {
+      if (seenOfficialSet.has(item.id)) return false;
+      const tk = normalizeTitleKey(item.title);
+      if (tk && seenOfficialSet.has(`title:${tk}`)) {
+        seenOfficialSet.add(item.id);
+        return false;
+      }
+      return true;
+    }).reverse();
     for (const item of newOfficial) {
       const freshCodes = item.codes.filter((c) => !seenCodesSet.has(c));
       const [trTitle, trSummary] = await Promise.all([
@@ -244,6 +332,8 @@ async function main() {
       });
       for (const c of freshCodes) seenCodesSet.add(c);
       seenOfficialSet.add(item.id);
+      const tk = normalizeTitleKey(item.title);
+      if (tk) seenOfficialSet.add(`title:${tk}`);
     }
 
     // 3. Yeni YouTube ödül/etkinlik videoları

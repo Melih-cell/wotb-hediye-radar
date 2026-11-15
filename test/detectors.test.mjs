@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { classifyRedditPost, extractBonusCodes } from '../src/detectors.mjs';
-import { cleanText, escapeHtml } from '../src/utils.mjs';
+import { cleanText, escapeHtml, getIstanbulTimeParts } from '../src/utils.mjs';
 
 test('gerçek bonus kod postunu yakalar ve kodu çıkarır', () => {
   const result = classifyRedditPost({
@@ -61,4 +61,27 @@ test('cleanText ve escapeHtml BBCode/HTML temizler ve özel karakterleri kaçır
   const cleaned = cleanText(raw, 120);
   assert.equal(cleaned, 'Hello & <World> "Blitz"!');
   assert.equal(escapeHtml(cleaned), 'Hello &amp; &lt;World&gt; &quot;Blitz&quot;!');
+});
+
+test('tırnak veya backtick içindeki rakamsız bonus kodu yakalar', () => {
+  const codes = extractBonusCodes('Use code `BLITZGIFT` on wargaming.net/shop/redeem right now!');
+  assert.deepEqual(codes, ['BLITZGIFT']);
+});
+
+test('canlı yayın ve Twitch Drops ödül postunu FREE_GIFT olarak yakalar', () => {
+  const result = classifyRedditPost({
+    title: 'Watch the portal stream today for stream rewards',
+    selftext: 'Drop crates will be credited after 30 minutes.',
+    flair: 'News'
+  });
+
+  assert.ok(result);
+  assert.equal(result.type, 'FREE_GIFT');
+  assert.deepEqual(result.codes, []);
+});
+
+test('getIstanbulTimeParts UTC zamanını İstanbul saatine doğru çevirir', () => {
+  const parts = getIstanbulTimeParts(new Date('2026-11-15T17:30:00Z'));
+  assert.equal(parts.dateStr, '2026-11-15');
+  assert.equal(parts.hour, 20);
 });
