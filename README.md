@@ -1,21 +1,26 @@
-# 🛡️ WoT Blitz Hediye, Kod ve Haber Radarı
+# 🛡️ Blitz Radar TR — WoT Blitz 7/24 Hediye, Bonus Kod ve Haber Radarı
 
-World of Tanks Blitz için **sıfır (%0) ban riskli**, oyun istemcisine veya belleğine dokunmayan, **GitHub Actions üzerinde 7/24 ücretsiz çalışan** ve **Telegram'a butonlu Türkçe bildirim gönderen** takip sistemi.
+World of Tanks Blitz için **sıfır (%0) ban riskli**, oyun istemcisine dokunmayan, **GitHub Actions bulutunda her 15 dakikada bir çalışan** resmi Türkiye topluluk kanalı ve çok kullanıcılı Telegram botu.
 
-## Neleri Takip Eder?
-1. **🚨 Anlık Bonus / Promosyon Kodları:** `r/WorldOfTanksBlitz` (RSS + ArcticShift yedekli), resmi Wargaming EU duyuruları, Steam haberleri ve resmi YouTube açıklamalarından yakalanan kodları tek dokunuşla kopyalanabilir (`<code>KOD</code>`) formatta atar; altındaki **`🎁 Kodu Aktif Et (EU)`** butonu doğrudan resmi aktivasyon sayfasını açar.
-2. **🎁 Mağaza Ücretsiz Paketleri (Free Bundles) & Yayın Ödülleri:** Süreli ücretsiz sandıklar, Twitch Drops / Portal Stream ödülleri için anında alarm gönderir.
-3. **📰 Resmi Türkçe Haber Özeti:** Wargaming EU Portal, Steam News (`AppID 444200`) ve resmi YouTube kanalından yeni etkinlik ve güncellemeleri Türkçeye çevirip özetler.
-4. **⏰ Günlük & Haftalık Hatırlatıcılar:**
-   - **Her akşam (19:00–22:59 TR):** Oyun içi günlük sandık ve mobil altın reklamları hatırlatması.
-   - **Her Cuma (18:00+ TR):** Çoğu oyuncunun unuttuğu [Wargaming Web Mağazası (Offers)](https://eu.wargaming.net/shop/wotb/offers/) haftalık ücretsiz paket hatırlatması.
+## Hemen Katıl & Kullan
+- 📢 **Herkese Açık Topluluk Kanalı:** [@blitzradartr](https://t.me/blitzradartr) *(Kardeşin, arkadaşların ve tüm oyuncular tek tıkla katılabilir)*
+- 🤖 **Kişisel Bot & Komutlar:** [@blitzradartr_bot](https://t.me/blitzradartr_bot)
+- ➕ **Klan / Arkadaş Grubuna Ekle:** [Botu Gruba Ekle](https://t.me/blitzradartr_bot?startgroup=true)
 
-## Hızlı Telegram Kurulumu (30 Saniye)
-1. Telegram'da **`@BotFather`** açın -> `/newbot` yazın -> botunuza bir isim ve `_bot` ile biten bir kullanıcı adı verin -> çıkan **Bot Token**'ı kopyalayın.
-2. Kardeşinizle ortak bir Telegram grubu açıp bu botu gruba ekleyin (veya botun sohbetine girip `/start` yazın).
-   - *İpucu:* Grupta iki kişi de bildirim alsın istiyorsanız grup açıp botu eklemek en pratiğidir; grupta `"merhaba"` yazmanız yeterlidir.
-3. Token'ı bağlamak için:
-   ```bash
-   node src/setup-telegram.mjs "<BOT_TOKEN>"
-   ```
-   *(Alternatif olarak GitHub Repo -> **Settings -> Secrets and variables -> Actions** altından `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` ekleyip Actions sekmesinden **WoT Blitz Hediye Radarı -> Run workflow** düğmesine basabilirsiniz.)*
+## Neler Sunar?
+1. **🚨 Anlık Bonus Kodlar:** `r/WorldOfTanksBlitz` (çift yedekli) ve resmi duyurulardaki kodları yakalar, tek dokunuşla kopyalanabilir (`<code>KOD</code>`) kutu + **`🎁 Kodu Aktif Et (EU)`** butonuyla paylaşır.
+2. **🎁 Ücretsiz Mağaza Paketleri & Twitch Drops:** Süreli ücretsiz kutular ve canlı yayın ödülleri için anlık alarm gönderir.
+3. **📰 Görselli Resmi Türkçe Haberler:** Wargaming EU RSS, Steam News ve Resmi YouTube kanalından çıkan haberleri kapak görseliyle ve Türkçeye çevrilmiş özetle paylaşır.
+4. **⏰ Zamanlanmış Hatırlatıcılar:**
+   - **Her gün 19:00–22:59 (TR):** Oyun içi günlük sandıklar ve mobil altın reklamları hatırlatması.
+   - **Her Cuma 18:00+ (TR):** Haftalık [Wargaming Web Mağazası (Offers)](https://eu.wargaming.net/shop/wotb/offers/) ücretsiz paket hatırlatması.
+5. **🤖 Etkileşimli Bot Komutları:**
+   - `/start` — Bildirimlere abone ol ve hoş geldin kartını gör
+   - `/sonhaberler` — Son 3 resmi WoT Blitz haberini Türkçe al
+   - `/magaza` — EU kod girme ve web mağaza ücretsiz teklif linklerini al
+   - `/durum` — 7/24 bulut radarı ve aktif abone durumunu gör
+   - `/durdur` — Kişisel/grup bildirimlerini durdur
+
+## Güvenlik & Gizlilik
+- Abone sohbet ID'leri herkese açık repoda düz metin tutulmaz; `AES-256-GCM` ile şifrelenmiş [subscribers.enc](state/subscribers.enc) içinde saklanır.
+- Oyun dosyalarına, ağ trafiğine veya emülatörlere kesinlikle müdahale etmez (`%0` ban riski).

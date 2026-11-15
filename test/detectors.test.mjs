@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { classifyRedditPost, extractBonusCodes } from '../src/detectors.mjs';
+import { decryptSubscribers, encryptSubscribers } from '../src/subscribers.mjs';
 import { cleanText, escapeHtml, getIstanbulTimeParts } from '../src/utils.mjs';
 
 test('gerçek bonus kod postunu yakalar ve kodu çıkarır', () => {
@@ -84,4 +85,15 @@ test('getIstanbulTimeParts UTC zamanını İstanbul saatine doğru çevirir', ()
   const parts = getIstanbulTimeParts(new Date('2026-11-15T17:30:00Z'));
   assert.equal(parts.dateStr, '2026-11-15');
   assert.equal(parts.hour, 20);
+});
+
+test('encryptSubscribers ve decryptSubscribers abone listesini AES-256-GCM ile korur', () => {
+  const secret = 'test-bot-secret-token-12345';
+  const encrypted = encryptSubscribers(['6991251336', '-1001234567890', '6991251336'], secret);
+  assert.ok(encrypted.iv && encrypted.tag && encrypted.data);
+  assert.equal(encrypted.data.includes('6991251336'), false);
+
+  const decrypted = decryptSubscribers(encrypted, secret);
+  assert.deepEqual(decrypted, ['6991251336', '-1001234567890']);
+  assert.deepEqual(decryptSubscribers(encrypted, 'yanlis-anahtar'), []);
 });

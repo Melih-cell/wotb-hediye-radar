@@ -5,26 +5,33 @@ import { fileURLToPath } from 'node:url';
 import { classifyRedditPost } from './detectors.mjs';
 import { fetchOfficialSources } from './sources/official.mjs';
 import { fetchRedditPosts } from './sources/reddit.mjs';
-import { translateToTurkish } from './translate.mjs';
-import { cleanText, getIstanbulTimeParts, normalizeTitleKey } from './utils.mjs';
 import {
+  loadEncryptedSubscribers,
+  processBotUpdates,
+  saveEncryptedSubscribers
+} from './subscribers.mjs';
+import {
+  broadcastTelegramPayload,
   buildDailyReminderMessage,
   buildOfficialNewsMessage,
   buildRewardAlertMessage,
   buildWeeklyWebOfferMessage,
   buildWelcomeMessage,
-  parseChatIds,
-  sendTelegramMessage
+  parseChatIds
 } from './telegram.mjs';
+import { translateToTurkish } from './translate.mjs';
+import { cleanText, getIstanbulTimeParts, normalizeTitleKey } from './utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
 const STATE_PATH = path.join(ROOT_DIR, 'state', 'seen.json');
+const SUBSCRIBERS_PATH = path.join(ROOT_DIR, 'state', 'subscribers.enc');
 const MAX_SEEN = 400;
 const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
 
 const DEFAULT_STATE = {
   initialized: false,
+  lastUpdateId: 0,
   seenOfficial: [],
   seenReddit: [],
   seenYoutube: [],
@@ -43,6 +50,7 @@ async function loadState() {
     const parsed = JSON.parse(raw);
     return {
       initialized: Boolean(parsed.initialized),
+      lastUpdateId: Number(parsed.lastUpdateId || 0),
       seenOfficial: Array.isArray(parsed.seenOfficial) ? parsed.seenOfficial : [],
       seenReddit: Array.isArray(parsed.seenReddit) ? parsed.seenReddit : [],
       seenYoutube: Array.isArray(parsed.seenYoutube) ? parsed.seenYoutube : [],
@@ -62,6 +70,7 @@ function trimList(arr) {
 async function saveState(state) {
   const next = {
     initialized: Boolean(state.initialized),
+    lastUpdateId: Number(state.lastUpdateId || 0),
     seenOfficial: trimList(state.seenOfficial),
     seenReddit: trimList(state.seenReddit),
     seenYoutube: trimList(state.seenYoutube),
@@ -73,37 +82,48 @@ async function saveState(state) {
   await fs.writeFile(STATE_PATH, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
 
-async function deliverOrPreview({ dryRun, token, chatIds, payload, label }) {
+async function deliverOrPreview({ dryRun, token, targets, subscribersSet, payload, label }) {
   if (dryRun) {
     console.log(`\n=== [DRY-RUN ÖNİZLEME: ${label}] ===`);
+    if (payload.imageUrl) console.log(`Görsel: ${payload.imageUrl}`);
     console.log(payload.html);
     if (payload.buttons?.length) {
       console.log('Butonlar:', JSON.stringify(payload.buttons));
     }
-    return;
+    return false;
   }
-  await sendTelegramMessage({
-    token,
-    chatIds,
-    html: payload.html,
-    buttons: payload.buttons
-  });
-  await sleep(800);
+
+  const { deadChatIds } = await broadcastTelegramPayload({ token, targets, payload });
+  let removed = false;
+  for (const deadId of deadChatIds) {
+    if (subscribersSet.delete(deadId)) {
+      removed = true;
+    }
+  }
+  await sleep(600);
+  return removed;
 }
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
   const testTelegram = process.argv.includes('--test-telegram') || process.env.SEND_TEST_CARDS === 'true';
   const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
-  const chatIds = parseChatIds(process.env.TELEGRAM_CHAT_ID || '');
+  const envChatIds = parseChatIds(process.env.TELEGRAM_CHAT_ID || '');
+  const channelId = String(process.env.TELEGRAM_CHANNEL_ID || '').trim();
+  const channelUsername = String(process.env.CHANNEL_USERNAME || 'blitzradartr').trim();
+  const botUsername = String(process.env.BOT_USERNAME || 'blitzradartr_bot').trim();
 
-  if (!dryRun && (!token || chatIds.length === 0)) {
-    console.log('ℹ️ TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID henüz ayarlanmadı. Kurulum tamamlanınca ilk bildirim gönderilecek.');
+  if (!dryRun && !token) {
+    console.log('ℹ️ TELEGRAM_BOT_TOKEN henüz ayarlanmadı. Kurulum tamamlanınca ilk bildirim gönderilecek.');
     process.exit(0);
   }
 
   const state = await loadState();
   const originalSnapshot = JSON.stringify(state);
+  const loadedSubscribers = token ? await loadEncryptedSubscribers(SUBSCRIBERS_PATH, token) : [];
+  const subscribersSet = new Set([...envChatIds, ...loadedSubscribers]);
+  let subscribersDirty = false;
+
   const now = Date.now();
   const trTime = getIstanbulTimeParts(new Date(now));
 
@@ -120,14 +140,41 @@ async function main() {
 
   console.log(`📊 Bulunan kayıtlar -> Resmi Haber: ${officialItems.length}, YouTube: ${youtubeVideos.length}, Reddit: ${redditPosts.length}`);
 
+  if (!dryRun && token) {
+    const updateSummary = await processBotUpdates({
+      token,
+      state,
+      subscribersSet,
+      recentNews: officialItems,
+      channelUsername,
+      botUsername
+    });
+    if (updateSummary.subscribersChanged) {
+      subscribersDirty = true;
+    }
+    if (updateSummary.processedCount > 0) {
+      console.log(`🤖 ${updateSummary.processedCount} yeni bot komutu/etkileşimi işlendi. Aktif abone: ${subscribersSet.size}`);
+    }
+  }
+
+  const targets = [...new Set([channelId, ...subscribersSet].filter(Boolean))];
+  if (!dryRun && targets.length === 0) {
+    console.log('ℹ️ Henüz bildirim hedefi yok (kanal veya /start yapan abone bekleniyor).');
+    if (JSON.stringify(state) !== originalSnapshot) {
+      await saveState(state);
+    }
+    process.exit(0);
+  }
+
   if (testTelegram) {
-    console.log('🧪 Canlı test modu aktif: 3 test kartı gönderiliyor (state/seen.json değiştirilmeyecek)...');
+    console.log(`🧪 Canlı test modu aktif (${targets.length} hedef): 3 test kartı gönderiliyor...`);
 
     const sampleOfficial = officialItems[0] || {
       source: 'Wargaming EU',
       title: 'World of Tanks Blitz Official News Check',
       summary: 'Live feed connection verified from GitHub Actions.',
       url: 'https://eu.wotblitz.com/en/news/',
+      imageUrl: '',
       codes: []
     };
     const [trNewsTitle, trNewsSummary] = await Promise.all([
@@ -139,15 +186,19 @@ async function main() {
       trTitle: trNewsTitle,
       trSummary: trNewsSummary,
       url: sampleOfficial.url,
-      codes: sampleOfficial.codes || []
+      imageUrl: sampleOfficial.imageUrl || '',
+      codes: sampleOfficial.codes || [],
+      channelUsername,
+      botUsername
     });
     await deliverOrPreview({
       dryRun,
       token,
-      chatIds,
+      targets,
+      subscribersSet,
       payload: {
         ...newsCard,
-        html: `🧪 <i>[CANLI SİSTEM TESTİ 1/3 — Gerçek Resmi Haber &amp; Türkçe Çeviri]</i>\n\n${newsCard.html}`
+        html: `🧪 <i>[CANLI SİSTEM TESTİ 1/3 — Görselli Resmi Haber &amp; Türkçe Çeviri]</i>\n\n${newsCard.html}`
       },
       label: 'CANLI TEST 1/3'
     });
@@ -168,12 +219,15 @@ async function main() {
       trTitle: trSimTitle,
       trSummary: trSimSummary,
       url: 'https://eu.wargaming.net/shop/redeem/',
-      sourceLabel: 'Sistem Testi Simülasyonu'
+      sourceLabel: 'Sistem Testi Simülasyonu',
+      channelUsername,
+      botUsername
     });
     await deliverOrPreview({
       dryRun,
       token,
-      chatIds,
+      targets,
+      subscribersSet,
       payload: {
         ...rewardCard,
         html: `🧪 <i>[CANLI SİSTEM TESTİ 2/3 — Örnek Kod Simülasyonu (test kodudur)]</i>\n\n${rewardCard.html}`
@@ -181,11 +235,12 @@ async function main() {
       label: 'CANLI TEST 2/3'
     });
 
-    const dailyCard = buildDailyReminderMessage();
+    const dailyCard = buildDailyReminderMessage({ channelUsername, botUsername });
     await deliverOrPreview({
       dryRun,
       token,
-      chatIds,
+      targets,
+      subscribersSet,
       payload: {
         ...dailyCard,
         html: `🧪 <i>[CANLI SİSTEM TESTİ 3/3 — Akşam 19:00 Günlük Hatırlatıcı Önizlemesi]</i>\n\n${dailyCard.html}`
@@ -193,7 +248,13 @@ async function main() {
       label: 'CANLI TEST 3/3'
     });
 
-    console.log('✅ Canlı test kartları tamamlandı (state/seen.json değiştirilmedi).');
+    if (subscribersDirty && !dryRun && token) {
+      await saveEncryptedSubscribers(SUBSCRIBERS_PATH, [...subscribersSet], token);
+    }
+    if (!dryRun && JSON.stringify(state) !== originalSnapshot) {
+      await saveState(state);
+    }
+    console.log('✅ Canlı test kartları tamamlandı (seen.json geçmişi değiştirilmedi).');
     return;
   }
 
@@ -202,26 +263,27 @@ async function main() {
   const seenRedditSet = new Set(state.seenReddit);
   const seenCodesSet = new Set(state.seenCodes);
 
+  const trackAndDeliver = async (payload, label) => {
+    const removed = await deliverOrPreview({ dryRun, token, targets, subscribersSet, payload, label });
+    if (removed) subscribersDirty = true;
+  };
+
   if (!state.initialized) {
     console.log('🚀 İlk kurulum tespit edildi: Hoş Geldin kartı hazırlanıyor ve geçmiş kayıtlar işaretleniyor...');
 
-    const top2 = officialItems.slice(0, 2);
-    const translatedTop2 = await Promise.all(
-      top2.map(async (item) => ({
+    const top3 = officialItems.slice(0, 3);
+    const translatedTop3 = await Promise.all(
+      top3.map(async (item) => ({
         ...item,
         trTitle: await translateToTurkish(item.title)
       }))
     );
 
-    await deliverOrPreview({
-      dryRun,
-      token,
-      chatIds,
-      payload: buildWelcomeMessage(translatedTop2),
-      label: 'HOŞ GELDİN KARTI'
-    });
+    await trackAndDeliver(
+      buildWelcomeMessage(translatedTop3, { channelUsername, botUsername }),
+      'HOŞ GELDİN KARTI'
+    );
 
-    // Son 48 saat içinde aktif kod / ücretsiz paket varsa ilk kurulumda da kaçırmadan bildir
     for (const post of redditPosts) {
       const classification = classifyRedditPost(post);
       const isRecent = !post.createdAt || now - post.createdAt <= FORTY_EIGHT_HOURS_MS;
@@ -236,20 +298,19 @@ async function main() {
             translateToTurkish(post.title),
             translateToTurkish(cleanText(post.selftext, 340))
           ]);
-          await deliverOrPreview({
-            dryRun,
-            token,
-            chatIds,
-            payload: buildRewardAlertMessage({
+          await trackAndDeliver(
+            buildRewardAlertMessage({
               type: classification.type,
               codes: freshCodes,
               trTitle,
               trSummary,
               url: post.url,
-              sourceLabel: 'r/WorldOfTanksBlitz (Son 48 Saat)'
+              sourceLabel: 'r/WorldOfTanksBlitz (Son 48 Saat)',
+              channelUsername,
+              botUsername
             }),
-            label: `AKTİF ÖDÜL (${post.id})`
-          });
+            `AKTİF ÖDÜL (${post.id})`
+          );
           for (const c of freshCodes) seenCodesSet.add(c);
         }
       }
@@ -270,7 +331,6 @@ async function main() {
     state.initialized = true;
     state.lastDailyReminderDate = trTime.dateStr;
   } else {
-    // 1. Yeni Reddit bonus kod & ücretsiz paket taraması (en eskiden yeniye)
     const newReddit = redditPosts.filter((p) => !seenRedditSet.has(p.id)).reverse();
     for (const post of newReddit) {
       const classification = classifyRedditPost(post);
@@ -281,62 +341,62 @@ async function main() {
             translateToTurkish(post.title),
             translateToTurkish(cleanText(post.selftext, 340))
           ]);
-          await deliverOrPreview({
-            dryRun,
-            token,
-            chatIds,
-            payload: buildRewardAlertMessage({
+          await trackAndDeliver(
+            buildRewardAlertMessage({
               type: classification.type,
               codes: freshCodes,
               trTitle,
               trSummary,
               url: post.url,
-              sourceLabel: 'r/WorldOfTanksBlitz'
+              sourceLabel: 'r/WorldOfTanksBlitz',
+              channelUsername,
+              botUsername
             }),
-            label: `REDDIT ${classification.type} (${post.id})`
-          });
+            `REDDIT ${classification.type} (${post.id})`
+          );
           for (const c of freshCodes) seenCodesSet.add(c);
         }
       }
       seenRedditSet.add(post.id);
     }
 
-    // 2. Yeni resmi Wargaming / Steam haberleri
-    const newOfficial = officialItems.filter((item) => {
-      if (seenOfficialSet.has(item.id)) return false;
-      const tk = normalizeTitleKey(item.title);
-      if (tk && seenOfficialSet.has(`title:${tk}`)) {
-        seenOfficialSet.add(item.id);
-        return false;
-      }
-      return true;
-    }).reverse();
+    const newOfficial = officialItems
+      .filter((item) => {
+        if (seenOfficialSet.has(item.id)) return false;
+        const tk = normalizeTitleKey(item.title);
+        if (tk && seenOfficialSet.has(`title:${tk}`)) {
+          seenOfficialSet.add(item.id);
+          return false;
+        }
+        return true;
+      })
+      .reverse();
+
     for (const item of newOfficial) {
       const freshCodes = item.codes.filter((c) => !seenCodesSet.has(c));
       const [trTitle, trSummary] = await Promise.all([
         translateToTurkish(item.title),
         translateToTurkish(item.summary)
       ]);
-      await deliverOrPreview({
-        dryRun,
-        token,
-        chatIds,
-        payload: buildOfficialNewsMessage({
+      await trackAndDeliver(
+        buildOfficialNewsMessage({
           source: item.source,
           trTitle,
           trSummary,
           url: item.url,
-          codes: freshCodes
+          imageUrl: item.imageUrl || '',
+          codes: freshCodes,
+          channelUsername,
+          botUsername
         }),
-        label: `RESMİ HABER (${item.id})`
-      });
+        `RESMİ HABER (${item.id})`
+      );
       for (const c of freshCodes) seenCodesSet.add(c);
       seenOfficialSet.add(item.id);
       const tk = normalizeTitleKey(item.title);
       if (tk) seenOfficialSet.add(`title:${tk}`);
     }
 
-    // 3. Yeni YouTube ödül/etkinlik videoları
     const newVideos = youtubeVideos.filter((v) => !seenYoutubeSet.has(v.id)).reverse();
     for (const video of newVideos) {
       const freshCodes = video.codes.filter((c) => !seenCodesSet.has(c));
@@ -345,45 +405,37 @@ async function main() {
           translateToTurkish(video.title),
           translateToTurkish(video.summary)
         ]);
-        await deliverOrPreview({
-          dryRun,
-          token,
-          chatIds,
-          payload: buildOfficialNewsMessage({
+        await trackAndDeliver(
+          buildOfficialNewsMessage({
             source: video.source,
             trTitle,
             trSummary,
             url: video.url,
-            codes: freshCodes
+            imageUrl: video.imageUrl || '',
+            codes: freshCodes,
+            channelUsername,
+            botUsername
           }),
-          label: `YOUTUBE (${video.id})`
-        });
+          `YOUTUBE (${video.id})`
+        );
         for (const c of freshCodes) seenCodesSet.add(c);
       }
       seenYoutubeSet.add(video.id);
     }
 
-    // 4. Günlük sandık & reklam hatırlatıcısı (19:00 - 22:59 TR saati arası günde 1 kez)
     if (trTime.hour >= 19 && trTime.hour <= 22 && state.lastDailyReminderDate !== trTime.dateStr) {
-      await deliverOrPreview({
-        dryRun,
-        token,
-        chatIds,
-        payload: buildDailyReminderMessage(),
-        label: 'GÜNLÜK HATIRLATMA'
-      });
+      await trackAndDeliver(
+        buildDailyReminderMessage({ channelUsername, botUsername }),
+        'GÜNLÜK HATIRLATMA'
+      );
       state.lastDailyReminderDate = trTime.dateStr;
     }
 
-    // 5. Haftalık Wargaming Web Mağaza hatırlatıcısı (Cuma 18:00+ TR saati)
     if (trTime.weekday === 'Fri' && trTime.hour >= 18 && state.lastWeeklyWebOfferWeek !== trTime.isoWeekKey) {
-      await deliverOrPreview({
-        dryRun,
-        token,
-        chatIds,
-        payload: buildWeeklyWebOfferMessage(),
-        label: 'HAFTALIK WEB MAĞAZA'
-      });
+      await trackAndDeliver(
+        buildWeeklyWebOfferMessage({ channelUsername, botUsername }),
+        'HAFTALIK WEB MAĞAZA'
+      );
       state.lastWeeklyWebOfferWeek = trTime.isoWeekKey;
     }
   }
@@ -396,6 +448,11 @@ async function main() {
   if (dryRun) {
     console.log('\n✅ Dry-run tamamlandı (state/seen.json değiştirilmedi).');
     return;
+  }
+
+  if (subscribersDirty || loadedSubscribers.length === 0) {
+    await saveEncryptedSubscribers(SUBSCRIBERS_PATH, [...subscribersSet], token);
+    console.log(`🔐 Şifreli abone listesi güncellendi (toplam abone: ${subscribersSet.size}).`);
   }
 
   if (JSON.stringify(state) !== originalSnapshot) {

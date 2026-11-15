@@ -31,6 +31,8 @@ async function fetchWargamingRss() {
       const category = cleanText(extractXmlTag(block, 'category'), 80);
       const pubDateRaw = cleanText(extractXmlTag(block, 'pubDate'), 80);
       const publishedAt = pubDateRaw ? Date.parse(pubDateRaw) || 0 : 0;
+      const rawIcon = cleanText(extractXmlTag(block, 'icon'), 500);
+      const imageUrl = /^https?:\/\//i.test(rawIcon) ? rawIcon : '';
 
       if (!guid || !title) continue;
       items.push({
@@ -39,6 +41,7 @@ async function fetchWargamingRss() {
         title,
         summary: description,
         url: link || guid,
+        imageUrl,
         category,
         publishedAt,
         codes: extractBonusCodes(`${title}\n${description}`)
@@ -74,12 +77,17 @@ async function fetchSteamNews() {
         const title = cleanText(item.title, 180);
         const rawContents = String(item.contents ?? '');
         const summary = cleanText(rawContents, 360);
+        const steamImgMatch = rawContents.match(/\{STEAM_CLAN_IMAGE\}(\/[^\s\]]+)/i);
+        const imageUrl = steamImgMatch
+          ? `https://clan.fastly.steamstatic.com/images${steamImgMatch[1]}`
+          : '';
         return {
           id: `steam:${item.gid}`,
           source: 'Steam Haberleri',
           title,
           summary,
           url: String(item.url || 'https://steamcommunity.com/app/444200/allnews/'),
+          imageUrl,
           category: String(item.feedlabel || 'Steam'),
           publishedAt: Number(item.date || 0) * 1000,
           codes: extractBonusCodes(`${title}\n${cleanText(rawContents, 0)}`)
@@ -129,6 +137,7 @@ async function fetchYouTubeRss() {
         title,
         summary,
         url,
+        imageUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
         publishedAt,
         codes,
         isRewardOrUpdate
